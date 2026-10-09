@@ -1,0 +1,6 @@
+android-app/local.properties
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
