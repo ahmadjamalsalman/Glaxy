@@ -4,4 +4,10 @@
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">gean4563t.xyz</domain>
     </domain-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">revteam1.offshoref.cc</domain>
+    </domain-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">intro.ps</domain>
+    </domain-config>
 </network-security-config>

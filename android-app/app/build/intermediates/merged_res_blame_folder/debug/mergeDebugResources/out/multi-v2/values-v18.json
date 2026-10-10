@@ -1,7 +1,7 @@
 {
     "logs": [
         {
-            "outputFile": "com.galaxy.iptv.app-mergeDebugResources-63:/values-v18/values-v18.xml",
+            "outputFile": "com.galaxy.iptv.app-mergeDebugResources-64:/values-v18/values-v18.xml",
             "map": [
                 {
                     "source": "/home/codespace/.gradle/caches/transforms-4/b3a27e6d957cad5c78bfe1508f73ec24/transformed/appcompat-1.6.1/res/values-v18/values-v18.xml",

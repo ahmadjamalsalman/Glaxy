@@ -1,7 +1,7 @@
 {
     "logs": [
         {
-            "outputFile": "com.galaxy.iptv.app-mergeDebugResources-63:/values-ms/values-ms.xml",
+            "outputFile": "com.galaxy.iptv.app-mergeDebugResources-64:/values-ms/values-ms.xml",
             "map": [
                 {
                     "source": "/home/codespace/.gradle/caches/transforms-4/4e9c6dd843dde796bcbb77c7742c9006/transformed/media3-exoplayer-1.5.1/res/values-ms/values-ms.xml",

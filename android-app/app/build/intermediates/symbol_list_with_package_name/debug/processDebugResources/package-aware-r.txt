@@ -1331,6 +1331,7 @@ color background_floating_material_dark
 color background_floating_material_light
 color background_material_dark
 color background_material_light
+color black
 color bright_foreground_disabled_material_dark
 color bright_foreground_disabled_material_light
 color bright_foreground_inverse_material_dark
@@ -3573,6 +3574,7 @@ id pathRelative
 id peekHeight
 id percent
 id pin
+id player_surface_frame
 id pooling_container_listener_holder_tag
 id position
 id postLayout
@@ -3582,6 +3584,9 @@ id progress_horizontal
 id radio
 id ratio
 id rectangles
+id remote_player_surface
+id remote_player_surface_frame
+id remote_subtitles_surface
 id report_drawn
 id reverseSawtooth
 id right
@@ -3647,6 +3652,10 @@ id stop
 id stretch
 id submenuarrow
 id submit_area
+id subtitles_surface_stub
+id surface_stub
+id surface_subtitles
+id surface_video
 id surface_view
 id tabMode
 id tag_accessibility_actions
@@ -3678,6 +3687,8 @@ id textinput_helper_text
 id textinput_placeholder
 id textinput_prefix_text
 id textinput_suffix_text
+id texture_stub
+id texture_video
 id texture_view
 id time
 id title
@@ -3930,10 +3941,14 @@ layout notification_template_media
 layout notification_template_media_custom
 layout notification_template_part_chronometer
 layout notification_template_part_time
+layout player_remote
 layout select_dialog_item_material
 layout select_dialog_multichoice_material
 layout select_dialog_singlechoice_material
 layout support_simple_spinner_dropdown_item
+layout surface_view
+layout texture_view
+layout vlc_video_layout
 mipmap ic_launcher
 mipmap ic_launcher_round
 plurals exo_controls_fastforward_by_amount_description
@@ -3975,6 +3990,8 @@ string bottomsheet_action_expand
 string bottomsheet_action_expand_halfway
 string bottomsheet_drag_handle_clicked
 string bottomsheet_drag_handle_content_description
+string build_libvlc_revision
+string build_vlc_revision
 string call_notification_answer_action
 string call_notification_answer_video_action
 string call_notification_decline_action

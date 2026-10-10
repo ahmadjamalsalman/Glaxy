@@ -1,8 +1,6 @@
 package com.galaxy.iptv
 
 import android.content.Context
-import android.content.ActivityNotFoundException
-import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Build
@@ -40,6 +38,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -61,7 +61,6 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
@@ -74,7 +73,6 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -104,9 +102,15 @@ import coil.compose.AsyncImage
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.util.VLCVideoLayout
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONArray
@@ -133,10 +137,15 @@ class MainActivity : ComponentActivity() {
     private var activationMessage by mutableStateOf<String?>(null)
     private var accountDetails by mutableStateOf<AccountDetails?>(null)
     private var rememberedCode by mutableStateOf("")
+    private var preferredPlayer by mutableStateOf(PlaybackEngine.EXO_PLAYER)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         rememberedCode = ActivationCodeStore.load(this).orEmpty()
+        preferredPlayer = getSharedPreferences("galaxy_settings", MODE_PRIVATE)
+            .getString("playback_engine", PlaybackEngine.EXO_PLAYER.name)
+            ?.let { runCatching { PlaybackEngine.valueOf(it) }.getOrNull() }
+            ?: PlaybackEngine.EXO_PLAYER
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
             hide(WindowInsetsCompat.Type.systemBars())
@@ -153,30 +162,40 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             GalaxyIptvAppTheme {
-                if (showSplash) {
-                    SplashScreen()
-                } else if (!isLoggedIn) {
-                    LoginScreen(
-                        initialCode = rememberedCode,
-                        isLoading = activationInProgress,
-                        message = activationMessage,
-                        onActivate = ::activate
-                    )
-                } else {
-                    GalaxyIptvScreen(
-                        account = accountDetails,
-                        onSessionExpired = { message ->
-                            activationMessage = message
-                            accountDetails = null
-                            isLoggedIn = false
-                        },
-                        onLogout = {
-                            ActivationCodeStore.clear(this)
-                            rememberedCode = ""
-                            accountDetails = null
-                            isLoggedIn = false
-                        }
-                    )
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    if (showSplash) {
+                        SplashScreen()
+                    } else if (!isLoggedIn) {
+                        LoginScreen(
+                            initialCode = rememberedCode,
+                            isLoading = activationInProgress,
+                            message = activationMessage,
+                            onActivate = ::activate
+                        )
+                    } else {
+                        GalaxyIptvScreen(
+                            account = accountDetails,
+                            preferredPlayer = preferredPlayer,
+                            onPreferredPlayerChange = { engine ->
+                                preferredPlayer = engine
+                                getSharedPreferences("galaxy_settings", MODE_PRIVATE)
+                                    .edit()
+                                    .putString("playback_engine", engine.name)
+                                    .apply()
+                            },
+                            onSessionExpired = { message ->
+                                activationMessage = message
+                                accountDetails = null
+                                isLoggedIn = false
+                            },
+                            onLogout = {
+                                ActivationCodeStore.clear(this)
+                                rememberedCode = ""
+                                accountDetails = null
+                                isLoggedIn = false
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -205,7 +224,8 @@ class MainActivity : ComponentActivity() {
                     accountDetails = AccountDetails(
                         userId = result.codeId,
                         code = code,
-                        expires = result.expire
+                        expires = result.expire,
+                        userAgent = result.userAgent
                     )
                     val notice = listOfNotNull(
                         result.message.takeIf(String::isNotBlank),
@@ -363,13 +383,15 @@ private data class ActivationResult(
     val message: String,
     val expire: String = "",
     val osd: String = "",
-    val codeId: String = ""
+    val codeId: String = "",
+    val userAgent: String = ""
 )
 
 private data class AccountDetails(
     val userId: String,
     val code: String,
-    val expires: String
+    val expires: String,
+    val userAgent: String
 )
 
 private data class ContentQuery(
@@ -407,6 +429,11 @@ private data class ContentScreenState(
     val query: ContentQuery,
     val detailEntry: ContentEntry? = null
 )
+
+private enum class PlaybackEngine {
+    EXO_PLAYER,
+    VLC
+}
 
 private object ActivationCodeStore {
     private const val KEY_ALIAS = "galaxy_activation_code_key"
@@ -481,7 +508,8 @@ private object ActivationApi {
                 message = response.optString("message", ""),
                 expire = response.optString("expire", ""),
                 osd = response.optString("osd", ""),
-                codeId = response.optString("code_id", "")
+                codeId = response.optString("code_id", ""),
+                userAgent = response.optString("user_agent", "")
             )
         } catch (_: Exception) {
             ActivationResult(-1, "تعذر الاتصال بالخادم، حاول مرة أخرى لاحقًا.")
@@ -784,6 +812,8 @@ private data class Channel(
 @Composable
 private fun GalaxyIptvScreen(
     account: AccountDetails?,
+    preferredPlayer: PlaybackEngine,
+    onPreferredPlayerChange: (PlaybackEngine) -> Unit,
     onSessionExpired: (String) -> Unit,
     onLogout: () -> Unit
 ) {
@@ -795,7 +825,6 @@ private fun GalaxyIptvScreen(
     var contentMessage by remember { mutableStateOf<String?>(null) }
     var selectedStreamUrl by remember { mutableStateOf("") }
     var fullScreenPlayback by remember { mutableStateOf(false) }
-    var fallbackPlayerEntry by remember { mutableStateOf<ContentEntry?>(null) }
     val context = LocalContext.current
     val currentContent = contentStack.lastOrNull()
 
@@ -838,16 +867,24 @@ private fun GalaxyIptvScreen(
         if (fullScreenPlayback && selectedStreamUrl.isNotBlank()) {
             IptvPlayer(
                 streamUrl = selectedStreamUrl,
+                userAgent = account?.userAgent.orEmpty(),
+                engine = preferredPlayer,
                 showController = false,
-                onPlaybackError = { streamUrl ->
-                    fullScreenPlayback = false
-                    fallbackPlayerEntry = contentEntries.firstOrNull { it.streamUrl == streamUrl }
+                onPlaybackError = {
+                    if (preferredPlayer == PlaybackEngine.EXO_PLAYER) {
+                        onPreferredPlayerChange(PlaybackEngine.VLC)
+                    } else {
+                        fullScreenPlayback = false
+                        Toast.makeText(context, "تعذر تشغيل هذا البث.", Toast.LENGTH_LONG).show()
+                    }
                 },
                 modifier = Modifier.fillMaxSize()
             )
         } else if (settingsOpen) {
             GalaxySettingsPage(
                 account = account,
+                preferredPlayer = preferredPlayer,
+                onPreferredPlayerChange = onPreferredPlayerChange,
                 selectedSetting = selectedSetting,
                 onSelectSetting = { selectedSetting = it },
                 onHome = { settingsOpen = false },
@@ -859,8 +896,17 @@ private fun GalaxyIptvScreen(
                 entries = contentEntries,
                 isLoading = contentLoading,
                 message = contentMessage,
-                channelListMode = currentContent.query.mode == "lite_channels" || currentContent.query.mode == "sat2iptv",
+                channelListMode = currentContent.query.mode in setOf(
+                    "lite_packages",
+                    "sports",
+                    "lite_channels",
+                    "sat2iptv"
+                ),
+                packageListMode = currentContent.query.mode == "lite_packages" || currentContent.query.mode == "sports",
                 selectedStreamUrl = selectedStreamUrl,
+                playerUserAgent = account?.userAgent.orEmpty(),
+                playbackEngine = preferredPlayer,
+                onSelectPlaybackEngine = onPreferredPlayerChange,
                 detailEntry = when (currentContent.query.mode) {
                     "movies_info" -> contentEntries.firstOrNull() ?: currentContent.detailEntry
                     else -> currentContent.detailEntry
@@ -884,8 +930,12 @@ private fun GalaxyIptvScreen(
                     selectedStreamUrl = media.streamUrl
                     fullScreenPlayback = true
                 },
-                onPlaybackError = { streamUrl ->
-                    fallbackPlayerEntry = contentEntries.firstOrNull { it.streamUrl == streamUrl }
+                onPlaybackError = {
+                    if (preferredPlayer == PlaybackEngine.EXO_PLAYER) {
+                        onPreferredPlayerChange(PlaybackEngine.VLC)
+                    } else {
+                        Toast.makeText(context, "تعذر تشغيل هذا البث.", Toast.LENGTH_LONG).show()
+                    }
                 }
             )
         } else {
@@ -908,63 +958,6 @@ private fun GalaxyIptvScreen(
             }
         }
 
-        fallbackPlayerEntry?.let { entry ->
-            AlertDialog(
-                onDismissRequest = { fallbackPlayerEntry = null },
-                title = { Text("تعذر تشغيل القناة") },
-                text = {
-                    Text("يمكنك فتح القناة باستخدام مشغل خارجي.")
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            openExternalPlayer(context, entry, "org.videolan.vlc")
-                            fallbackPlayerEntry = null
-                        }
-                    ) { Text("VLC") }
-                },
-                dismissButton = {
-                    Column {
-                        TextButton(
-                            onClick = {
-                                openExternalPlayer(context, entry, "com.mxtech.videoplayer.ad")
-                                fallbackPlayerEntry = null
-                            }
-                        ) { Text("MX Player") }
-                        TextButton(
-                            onClick = {
-                                openExternalPlayer(context, entry)
-                                fallbackPlayerEntry = null
-                            }
-                        ) { Text("مشغل خارجي") }
-                    }
-                },
-                containerColor = Color(0xFF101827),
-                titleContentColor = Color.White,
-                textContentColor = Color(0xFFD6D9E4)
-            )
-        }
-    }
-}
-
-private fun openExternalPlayer(context: Context, entry: ContentEntry, packageName: String? = null) {
-    val intent = Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(Uri.parse(entry.streamUrl), "video/*")
-        putExtra("title", entry.title)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (packageName != null) setPackage(packageName)
-    }
-
-    try {
-        val launchIntent = if (packageName == null) {
-            Intent.createChooser(intent, "اختر مشغل فيديو خارجي")
-        } else {
-            intent
-        }
-        context.startActivity(launchIntent)
-    } catch (_: ActivityNotFoundException) {
-        val playerName = if (packageName == "org.videolan.vlc") "VLC" else "MX Player"
-        Toast.makeText(context, "تطبيق $playerName غير مثبت.", Toast.LENGTH_LONG).show()
     }
 }
 
@@ -1114,7 +1107,11 @@ private fun GalaxyContentPage(
     isLoading: Boolean,
     message: String?,
     channelListMode: Boolean,
+    packageListMode: Boolean,
     selectedStreamUrl: String,
+    playerUserAgent: String,
+    playbackEngine: PlaybackEngine,
+    onSelectPlaybackEngine: (PlaybackEngine) -> Unit,
     detailEntry: ContentEntry?,
     episodes: List<ContentEntry>,
     onBack: () -> Unit,
@@ -1126,7 +1123,6 @@ private fun GalaxyContentPage(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 28.dp, vertical = 18.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -1142,7 +1138,6 @@ private fun GalaxyContentPage(
                 Text("GALAXY IPTV", color = Color(0xFF73809F), fontSize = 10.sp)
             }
         }
-
         Spacer(modifier = Modifier.height(14.dp))
 
         when {
@@ -1160,41 +1155,80 @@ private fun GalaxyContentPage(
             channelListMode -> ChannelPlayerLayout(
                 modifier = Modifier.weight(1f),
                 entries = entries,
+                packageListMode = packageListMode,
                 selectedStreamUrl = selectedStreamUrl,
+                playerUserAgent = playerUserAgent,
+                playbackEngine = playbackEngine,
+                onSelectPlaybackEngine = onSelectPlaybackEngine,
+                onSelectEntry = onSelectEntry,
                 onSelectStream = onSelectStream,
                 onPlaybackError = onPlaybackError
             )
-            else -> LazyColumn(
+            else -> LazyVerticalGrid(
+                columns = GridCells.Fixed(5),
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(entries, key = { "${it.id}:${it.title}" }) { entry ->
-                    val shape = RoundedCornerShape(7.dp)
-                    Row(
+                items(entries.size, key = { "${entries[it].id}:${entries[it].title}" }) { index ->
+                    val entry = entries[index]
+                    val shape = RoundedCornerShape(6.dp)
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .height(190.dp)
                             .clip(shape)
-                            .background(Color(0xFF080916))
+                            .background(Color(0xFF090C19))
                             .border(1.dp, Color(0xFF1B2852), shape)
                             .clickable(enabled = entry.nextQuery != null) { onSelectEntry(entry) }
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = if (entry.streamUrl.isNotBlank()) Icons.Default.PlayArrow else Icons.Default.Movie,
-                            contentDescription = null,
-                            tint = Color(0xFF43BFFF),
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(entry.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                            if (entry.subtitle.isNotBlank()) {
-                                Text(entry.subtitle, color = Color(0xFF8792AE), fontSize = 10.sp)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(132.dp)
+                                .background(Color(0xFF111827)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (entry.imageUrl.isNotBlank()) {
+                                AsyncImage(
+                                    model = entry.imageUrl,
+                                    contentDescription = entry.title,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Movie,
+                                    contentDescription = null,
+                                    tint = Color(0xFF43BFFF),
+                                    modifier = Modifier.size(36.dp)
+                                )
                             }
                         }
-                        if (entry.nextQuery != null) {
-                            Text("›", color = Color(0xFF4CBFFF), fontSize = 24.sp)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .padding(horizontal = 9.dp, vertical = 7.dp),
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = entry.title,
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (entry.subtitle.isNotBlank()) {
+                                Text(
+                                    text = entry.subtitle,
+                                    color = Color(0xFF8792AE),
+                                    fontSize = 10.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                 }
@@ -1343,7 +1377,12 @@ private fun GalaxyMediaDetailsPage(
 private fun ChannelPlayerLayout(
     modifier: Modifier = Modifier,
     entries: List<ContentEntry>,
+    packageListMode: Boolean,
     selectedStreamUrl: String,
+    onSelectEntry: (ContentEntry) -> Unit,
+    playerUserAgent: String,
+    playbackEngine: PlaybackEngine,
+    onSelectPlaybackEngine: (PlaybackEngine) -> Unit,
     onSelectStream: (ContentEntry) -> Unit,
     onPlaybackError: (String) -> Unit
 ) {
@@ -1378,7 +1417,9 @@ private fun ChannelPlayerLayout(
                                     color = if (selected) Color(0xFF36B8FF) else Color(0x442C3040),
                                     shape = RoundedCornerShape(3.dp)
                                 )
-                                .clickable { onSelectStream(entry) }
+                                .clickable {
+                                    if (packageListMode) onSelectEntry(entry) else onSelectStream(entry)
+                                }
                                 .padding(horizontal = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -1419,9 +1460,13 @@ private fun ChannelPlayerLayout(
                 .border(1.dp, Color(0xFF262838), RoundedCornerShape(4.dp)),
             contentAlignment = Alignment.Center
         ) {
-            if (selectedStreamUrl.isNotBlank()) {
+            if (packageListMode) {
+                Text("اختر باقة لعرض القنوات", color = Color(0xFF8991A7), fontSize = 13.sp)
+            } else if (selectedStreamUrl.isNotBlank()) {
                 IptvPlayer(
                     streamUrl = selectedStreamUrl,
+                    userAgent = playerUserAgent,
+                    engine = playbackEngine,
                     onPlaybackError = onPlaybackError
                 )
             } else {
@@ -1435,12 +1480,31 @@ private fun ChannelPlayerLayout(
 private fun IptvPlayer(
     streamUrl: String,
     onPlaybackError: (String) -> Unit,
+    userAgent: String,
+    engine: PlaybackEngine,
     modifier: Modifier = Modifier,
     showController: Boolean = true
 ) {
+    if (engine == PlaybackEngine.VLC) {
+        VlcPlayer(
+            streamUrl = streamUrl,
+            userAgent = userAgent,
+            onPlaybackError = onPlaybackError,
+            modifier = modifier
+        )
+        return
+    }
+
     val context = LocalContext.current
-    val player = androidx.compose.runtime.remember(context) {
-        ExoPlayer.Builder(context).build()
+    val player = androidx.compose.runtime.remember(context, userAgent) {
+        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+            .setUserAgent(userAgent.ifBlank { "Galaxy IPTV" })
+            .setConnectTimeoutMs(30_000)
+            .setReadTimeoutMs(30_000)
+            .setAllowCrossProtocolRedirects(true)
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(httpDataSourceFactory))
+            .build()
     }
 
     DisposableEffect(player) {
@@ -1477,8 +1541,57 @@ private fun IptvPlayer(
 }
 
 @Composable
+private fun VlcPlayer(
+    streamUrl: String,
+    userAgent: String,
+    onPlaybackError: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val libVlc = androidx.compose.runtime.remember(context) {
+        LibVLC(context, arrayListOf("--network-caching=1200"))
+    }
+    val player = androidx.compose.runtime.remember(libVlc) { MediaPlayer(libVlc) }
+
+    DisposableEffect(player, libVlc, streamUrl) {
+        val listener = MediaPlayer.EventListener { event ->
+            if (event.type == MediaPlayer.Event.EncounteredError) {
+                onPlaybackError(streamUrl)
+            }
+        }
+        player.setEventListener(listener)
+        onDispose {
+            player.setEventListener(null)
+            player.stop()
+            player.detachViews()
+            player.release()
+            libVlc.release()
+        }
+    }
+
+    LaunchedEffect(player, streamUrl, userAgent) {
+        val media = Media(libVlc, Uri.parse(streamUrl))
+        if (userAgent.isNotBlank()) media.addOption(":http-user-agent=$userAgent")
+        player.media = media
+        media.release()
+        player.play()
+    }
+
+    AndroidView(
+        factory = { viewContext ->
+            VLCVideoLayout(viewContext).also { videoLayout ->
+                player.attachViews(videoLayout, null, false, false)
+            }
+        },
+        modifier = modifier.fillMaxSize()
+    )
+}
+
+@Composable
 private fun GalaxySettingsPage(
     account: AccountDetails?,
+    preferredPlayer: PlaybackEngine,
+    onPreferredPlayerChange: (PlaybackEngine) -> Unit,
     selectedSetting: String,
     onSelectSetting: (String) -> Unit,
     onHome: () -> Unit,
@@ -1560,7 +1673,11 @@ private fun GalaxySettingsPage(
                         AccountDetailRow("Expires", account?.expires ?: "--")
                     }
                     "Advanced" -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        AccountDetailRow("Playback", "Auto")
+                        Text("مشغل الفيديو", color = Color(0xFF9BA6C4), fontSize = 11.sp)
+                        PlaybackEngineSelector(
+                            selected = preferredPlayer,
+                            onSelect = onPreferredPlayerChange
+                        )
                         AccountDetailRow("Buffer", "Normal")
                         AccountDetailRow("Updates", "Automatic")
                     }
@@ -1584,6 +1701,45 @@ private fun GalaxySettingsPage(
             fontSize = 10.sp,
             modifier = Modifier.padding(top = 8.dp)
         )
+    }
+}
+
+@Composable
+private fun PlaybackEngineSelector(
+    selected: PlaybackEngine,
+    onSelect: (PlaybackEngine) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0xFF080C19))
+            .border(1.dp, Color(0xFF1B2852), RoundedCornerShape(6.dp))
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        listOf(
+            PlaybackEngine.EXO_PLAYER to "ExoPlayer",
+            PlaybackEngine.VLC to "VLC"
+        ).forEach { (engine, label) ->
+            val isSelected = engine == selected
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(if (isSelected) Color(0xFF14345A) else Color.Transparent)
+                    .clickable { onSelect(engine) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = label,
+                    color = if (isSelected) Color(0xFF6AD3FF) else Color(0xFF9BA6C4),
+                    fontSize = 12.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
+                )
+            }
+        }
     }
 }
 
